@@ -1,24 +1,36 @@
 package org.example;
 
-import org.bouncycastle.asn1.DERIA5String;
-import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
-import org.bouncycastle.asn1.x500.X500Name;
-import org.bouncycastle.asn1.x509.*;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
-import org.bouncycastle.openssl.jcajce.JcePEMEncryptorBuilder;
-import org.bouncycastle.operator.ContentSigner;
-import org.bouncycastle.operator.OperatorCreationException;
-import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
-import org.bouncycastle.pkcs.PKCS10CertificationRequest;
-import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequestBuilder;
-
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.security.*;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.NoSuchAlgorithmException;
+import java.security.Security;
+import java.security.cert.CertificateException;
 import java.security.spec.ECGenParameterSpec;
 import java.util.List;
+import org.bouncycastle.asn1.DERIA5String;
+import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x509.ExtendedKeyUsage;
+import org.bouncycastle.asn1.x509.Extension;
+import org.bouncycastle.asn1.x509.Extensions;
+import org.bouncycastle.asn1.x509.ExtensionsGenerator;
+import org.bouncycastle.asn1.x509.GeneralName;
+import org.bouncycastle.asn1.x509.GeneralNames;
+import org.bouncycastle.asn1.x509.KeyPurposeId;
+import org.bouncycastle.asn1.x509.KeyUsage;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.jce.provider.PEMUtil;
+import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
+import org.bouncycastle.openssl.jcajce.JcePEMEncryptorBuilder;
+import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.bouncycastle.pkcs.PKCS10CertificationRequest;
+import org.bouncycastle.pkcs.PKCS10CertificationRequestBuilder;
+import org.bouncycastle.pkcs.jcajce.JcaPKCS10CertificationRequestBuilder;
 
 public class CSR {
 
@@ -28,7 +40,8 @@ public class CSR {
   private byte[] csrPemBytes;
 
   public CSR(String cn, List<String> dnsSans)
-    throws NoSuchAlgorithmException, OperatorCreationException, IOException, InvalidAlgorithmParameterException {
+          throws NoSuchAlgorithmException, OperatorCreationException, IOException, InvalidAlgorithmParameterException,
+          org.bouncycastle.operator.OperatorCreationException {
     Security.addProvider(new BouncyCastleProvider());
     this.key = generatePrivateKey();
     this.cn = cn;
@@ -43,7 +56,7 @@ public class CSR {
   }
 
   private byte[] generateCSR()
-    throws OperatorCreationException, IOException {
+          throws NoSuchAlgorithmException, OperatorCreationException, IOException, org.bouncycastle.operator.OperatorCreationException {
     X500Name subject = new X500Name("CN=" + cn);
     ExtensionsGenerator extGen = new ExtensionsGenerator();
 
@@ -59,8 +72,8 @@ public class CSR {
     ContentSigner signer = new JcaContentSignerBuilder("SHA256withECDSA").build(key.getPrivate());
 
     PKCS10CertificationRequest csr = new JcaPKCS10CertificationRequestBuilder(subject, key.getPublic())
-      .addAttribute(PKCSObjectIdentifiers.pkcs_9_at_extensionRequest, extensions)
-      .build(signer);
+            .addAttribute(PKCSObjectIdentifiers.pkcs_9_at_extensionRequest, extensions)
+            .build(signer);
 
     return csr.getEncoded();
   }
@@ -71,7 +84,7 @@ public class CSR {
 
   public String getCn() { return cn; }
 
-  public String getKeyPem(String passphrase) throws IOException {
+  public String getKeyPem(String passphrase) throws IOException, OperatorCreationException {
     ByteArrayOutputStream keyPemStream = new ByteArrayOutputStream();
     JcaPEMWriter pemWriter = new JcaPEMWriter(new OutputStreamWriter(keyPemStream));
     pemWriter.writeObject(key, new JcePEMEncryptorBuilder("AES-256-CBC").build(passphrase.toCharArray()));
@@ -85,5 +98,33 @@ public class CSR {
 
   public KeyPair getKey() {
     return key;
+  }
+
+  // Generate a CSR in PEM format
+  public String toPem()
+          throws NoSuchAlgorithmException, CertificateException, IOException, org.bouncycastle.operator.OperatorCreationException {
+    KeyPair keyPair = generateKeyPair();
+    PKCS10CertificationRequestBuilder csrBuilder = new JcaPKCS10CertificationRequestBuilder(
+            new X500Name("CN=" + this.cn), keyPair.getPublic());
+
+    ExtensionsGenerator extGen = new ExtensionsGenerator();
+    GeneralNames subjectAltName = new GeneralNames(
+            dnsSans.stream().map(san -> new GeneralName(GeneralName.dNSName, san)).toArray(GeneralName[]::new)
+    );
+    extGen.addExtension(Extension.subjectAlternativeName, false, subjectAltName);
+
+    csrBuilder.addAttribute(PKCSObjectIdentifiers.pkcs_9_at_extensionRequest, extGen.generate());
+
+    JcaContentSignerBuilder signerBuilder = new JcaContentSignerBuilder("SHA256withECDSA");
+    ContentSigner signer = signerBuilder.build(keyPair.getPrivate());
+
+    PKCS10CertificationRequest csr = csrBuilder.build(signer);
+    return PemUtils.encodeToPem(csr);
+  }
+
+  private KeyPair generateKeyPair() throws NoSuchAlgorithmException {
+    KeyPairGenerator keyPairGen = KeyPairGenerator.getInstance("EC");
+    keyPairGen.initialize(256);
+    return keyPairGen.generateKeyPair();
   }
 }
